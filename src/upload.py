@@ -12,6 +12,14 @@ API_SERVICE_NAME = "youtube"
 API_VERSION = "v3"
 TOKEN_FILE = "token.json"
 
+class BatchLimitReached(Exception):
+    """Raised when batch upload limit is reached."""
+    pass
+
+class QuotaExceededError(Exception):
+    """Raised when YouTube API quota is exceeded."""
+    pass
+
 def get_authenticated_service(client_secrets_file: str):
     creds = None
     if os.path.exists(TOKEN_FILE):
@@ -28,7 +36,7 @@ def get_authenticated_service(client_secrets_file: str):
     return googleapiclient.discovery.build(
         API_SERVICE_NAME, API_VERSION, credentials=creds)
 
-def initialize_upload(youtube, options, insta_url):
+def initialize_upload(youtube, options, insta_url, uploaded_count=None, batch_size=None):
     body = {
         "snippet": {
             "title": options.title,
@@ -55,10 +63,26 @@ def initialize_upload(youtube, options, insta_url):
             if status:
                 print(f"Upload progress: {int(status.progress() * 100)}%")
         print(f"Upload Complete! Video ID: {response['id']}")
+
+        # Batch limit check
+        if uploaded_count is not None and batch_size is not None:
+            if uploaded_count + 1 >= batch_size:
+                print(f"Batch limit of {batch_size} reached during upload.")
+                raise BatchLimitReached()
+
         return response['id']
+
     except googleapiclient.errors.HttpError as e:
         error_content = e.content.decode() if isinstance(e.content, bytes) else str(e.content)
-        log_error(insta_url, f"HTTP error {e.resp.status}: {error_content}")
+        if 'quotaExceeded' in error_content:
+            print("YouTube API quota exceeded. Stopping further uploads.")
+            raise QuotaExceededError()
+        else:
+            log_error(insta_url, f"HTTP error {e.resp.status}: {error_content}")
+            raise
+    except BatchLimitReached:
+        raise
+    except QuotaExceededError:
         raise
     except Exception as e:
         log_error(insta_url, f"Unexpected upload error: {e}")

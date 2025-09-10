@@ -1,4 +1,3 @@
-# src/download.py
 import os
 import re
 import urllib.parse
@@ -55,7 +54,8 @@ def get_video_duration(filename: str) -> float:
             stderr=subprocess.STDOUT,
             check=True
         )
-        return float(result.stdout)
+        duration_str = result.stdout.decode().strip()
+        return float(duration_str)
     except Exception as e:
         print(f"Warning: Could not determine video duration: {e}")
         return -1
