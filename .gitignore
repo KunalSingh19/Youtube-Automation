@@ -1,0 +1,7 @@
+token.json
+creds.json
+error_log.txt
+src/__pycache__
+Data/node_modules
+.git
+upload_history.json
