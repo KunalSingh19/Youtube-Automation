@@ -44,12 +44,13 @@ def initialize_upload(youtube, options, insta_url, uploaded_count=None, batch_si
             "title": options.title,
             "description": options.description,
             "tags": options.tags if options.tags else None,
-            "categoryId": options.category_id
+            # categoryId removed
         },
         "status": {
             "privacyStatus": options.privacy_status
         }
     }
+    # Remove None values from snippet
     body["snippet"] = {k: v for k, v in body["snippet"].items() if v is not None}
     media = MediaFileUpload(options.file, chunksize=-1, resumable=True)
 

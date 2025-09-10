@@ -13,7 +13,7 @@ def main():
     parser = argparse.ArgumentParser(description="Download Instagram videos and upload to YouTube")
     parser.add_argument("--client-secrets", required=True, help="Path to client_secrets.json")
     parser.add_argument("--privacy-status", default="private", choices=["public", "private", "unlisted"], help="YouTube video privacy status")
-    parser.add_argument("--category-id", default="24", help="YouTube video category ID (default: 24 = Gaming)")
+    # Removed category-id argument
 
     args = parser.parse_args()
 
@@ -80,7 +80,7 @@ def main():
         options.description = description
         options.privacy_status = args.privacy_status
         options.tags = tags
-        options.category_id = args.category_id
+        # Removed category_id attribute
 
         try:
             video_id = upload.initialize_upload(youtube, options, insta_url, uploaded_count, BATCH_SIZE)
