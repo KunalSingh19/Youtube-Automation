@@ -3,16 +3,17 @@ import sys
 import argparse
 import json
 from src import download, upload, utils, history
+from src.upload import BatchLimitReached, QuotaExceededError
 
 INSTAGRAM_JSON_FILE = "Data/reelsData.json"
 UPLOAD_HISTORY_FILE = "upload_history.json"
-BATCH_SIZE = 3
+BATCH_SIZE = 5
 
 def main():
     parser = argparse.ArgumentParser(description="Download Instagram videos and upload to YouTube")
     parser.add_argument("--client-secrets", required=True, help="Path to client_secrets.json")
     parser.add_argument("--privacy-status", default="private", choices=["public", "private", "unlisted"], help="YouTube video privacy status")
-    parser.add_argument("--category-id", default="20", help="YouTube video category ID (default: 20 = Gaming)")
+    parser.add_argument("--category-id", default="24", help="YouTube video category ID (default: 24 = Gaming)")
 
     args = parser.parse_args()
 
@@ -24,10 +25,8 @@ def main():
         print(f"Error: Client secrets file '{args.client_secrets}' does not exist.")
         sys.exit(1)
 
-    insta_data = None
     with open(INSTAGRAM_JSON_FILE, 'r', encoding='utf-8') as f:
-        insta_data = f.read()
-    insta_data = json.loads(insta_data)
+        insta_data = json.load(f)
 
     upload_history = history.load_upload_history(UPLOAD_HISTORY_FILE)
     youtube = upload.get_authenticated_service(args.client_secrets)
@@ -84,7 +83,13 @@ def main():
         options.category_id = args.category_id
 
         try:
-            video_id = upload.initialize_upload(youtube, options, insta_url)
+            video_id = upload.initialize_upload(youtube, options, insta_url, uploaded_count, BATCH_SIZE)
+        except QuotaExceededError:
+            print("Quota exceeded error received. Stopping all uploads.")
+            break
+        except BatchLimitReached:
+            print("Batch limit reached. Stopping uploads.")
+            break
         except Exception as e:
             print(f"Upload failed for {insta_url}: {e}")
             if os.path.exists(video_filename):

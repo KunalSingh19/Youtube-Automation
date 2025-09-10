@@ -1,16 +1,7 @@
-import os
-import google_auth_oauthlib.flow
-import googleapiclient.discovery
+import time
 import googleapiclient.errors
 from googleapiclient.http import MediaFileUpload
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
 from .utils import log_error
-
-SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
-API_SERVICE_NAME = "youtube"
-API_VERSION = "v3"
-TOKEN_FILE = "token.json"
 
 class BatchLimitReached(Exception):
     """Raised when batch upload limit is reached."""
@@ -21,6 +12,17 @@ class QuotaExceededError(Exception):
     pass
 
 def get_authenticated_service(client_secrets_file: str):
+    import os
+    import google_auth_oauthlib.flow
+    import googleapiclient.discovery
+    from google.auth.transport.requests import Request
+    from google.oauth2.credentials import Credentials
+
+    SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
+    API_SERVICE_NAME = "youtube"
+    API_VERSION = "v3"
+    TOKEN_FILE = "token.json"
+
     creds = None
     if os.path.exists(TOKEN_FILE):
         creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
@@ -36,7 +38,7 @@ def get_authenticated_service(client_secrets_file: str):
     return googleapiclient.discovery.build(
         API_SERVICE_NAME, API_VERSION, credentials=creds)
 
-def initialize_upload(youtube, options, insta_url, uploaded_count=None, batch_size=None):
+def initialize_upload(youtube, options, insta_url, uploaded_count=None, batch_size=None, max_retries=3, retry_delay=60):
     body = {
         "snippet": {
             "title": options.title,
@@ -51,39 +53,46 @@ def initialize_upload(youtube, options, insta_url, uploaded_count=None, batch_si
     body["snippet"] = {k: v for k, v in body["snippet"].items() if v is not None}
     media = MediaFileUpload(options.file, chunksize=-1, resumable=True)
 
-    try:
-        request = youtube.videos().insert(
-            part="snippet,status",
-            body=body,
-            media_body=media
-        )
-        response = None
-        while response is None:
-            status, response = request.next_chunk()
-            if status:
-                print(f"Upload progress: {int(status.progress() * 100)}%")
-        print(f"Upload Complete! Video ID: {response['id']}")
+    tries = 0
+    while tries < max_retries:
+        try:
+            request = youtube.videos().insert(
+                part="snippet,status",
+                body=body,
+                media_body=media
+            )
+            response = None
+            while response is None:
+                status, response = request.next_chunk()
+                if status:
+                    print(f"Upload progress: {int(status.progress() * 100)}%")
+            print(f"Upload Complete! Video ID: {response['id']}")
 
-        # Batch limit check
-        if uploaded_count is not None and batch_size is not None:
-            if uploaded_count + 1 >= batch_size:
-                print(f"Batch limit of {batch_size} reached during upload.")
-                raise BatchLimitReached()
+            # Batch limit check
+            if uploaded_count is not None and batch_size is not None:
+                if uploaded_count + 1 >= batch_size:
+                    print(f"Batch limit of {batch_size} reached during upload.")
+                    raise BatchLimitReached()
 
-        return response['id']
+            return response['id']
 
-    except googleapiclient.errors.HttpError as e:
-        error_content = e.content.decode() if isinstance(e.content, bytes) else str(e.content)
-        if 'quotaExceeded' in error_content:
-            print("YouTube API quota exceeded. Stopping further uploads.")
-            raise QuotaExceededError()
-        else:
-            log_error(insta_url, f"HTTP error {e.resp.status}: {error_content}")
+        except googleapiclient.errors.HttpError as e:
+            error_content = e.content.decode() if isinstance(e.content, bytes) else str(e.content)
+            if 'quotaExceeded' in error_content:
+                tries += 1
+                print(f"Quota exceeded error detected. Retry {tries}/{max_retries} after {retry_delay} seconds.")
+                if tries >= max_retries:
+                    print("Max retries reached due to quotaExceeded. Stopping uploads.")
+                    raise QuotaExceededError()
+                time.sleep(retry_delay)
+                continue  # retry
+            else:
+                log_error(insta_url, f"HTTP error {e.resp.status}: {error_content}")
+                raise
+        except BatchLimitReached:
             raise
-    except BatchLimitReached:
-        raise
-    except QuotaExceededError:
-        raise
-    except Exception as e:
-        log_error(insta_url, f"Unexpected upload error: {e}")
-        raise
+        except QuotaExceededError:
+            raise
+        except Exception as e:
+            log_error(insta_url, f"Unexpected upload error: {e}")
+            raise
