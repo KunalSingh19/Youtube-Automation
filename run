@@ -1,1 +1,0 @@
-python main.py --client-secrets creds.json --privacy-status public --upload-one
