@@ -1,70 +1,53 @@
+"""
+Handles downloading remote Instagram videos to local tmp/ folder.
+"""
+
 import os
-import re
-import urllib.parse
 import hashlib
 import requests
-from .utils import log_error
+from urllib.parse import urlparse
+from .config import TMP_DIR
 
-TMP_FOLDER = "tmp"
-
-def sanitize_filename(name: str, max_length=100) -> str:
-    parsed = urllib.parse.urlparse(name)
-    path = parsed.path + ("_" + parsed.query if parsed.query else "")
-    safe_name = re.sub(r'[^A-Za-z0-9._-]', '_', path)
-    if len(safe_name) > max_length:
-        safe_name = safe_name[:max_length]
-    if not safe_name.lower().endswith('.mp4'):
-        safe_name += '.mp4'
-    return safe_name
-
-def get_unique_filename(insta_url: str) -> str:
-    if not os.path.exists(TMP_FOLDER):
-        os.makedirs(TMP_FOLDER)
-    base_name = sanitize_filename(insta_url)
-    full_path = os.path.join(TMP_FOLDER, base_name)
-    if os.path.exists(full_path):
-        hash_suffix = hashlib.md5(insta_url.encode('utf-8')).hexdigest()[:6]
-        name, ext = os.path.splitext(base_name)
-        full_path = os.path.join(TMP_FOLDER, f"{name}_{hash_suffix}{ext}")
-    return full_path
-
-def download_video(url: str, filename: str, insta_url: str):
+def get_unique_filename(insta_url):
     """
-    Download video from remote URL to filename (only called for http/https URLs).
-    """
-    if not url.startswith(('http://', 'https://')):
-        raise ValueError("download_video called with non-remote URL")
+    Generate unique local filename based on Instagram URL.
     
-    print(f"Downloading video from {url} ...")
+    Args:
+        insta_url (str): Instagram post URL.
+    
+    Returns:
+        str: Path like tmp/reel_<hash>.mp4
+    """
+    # Sanitize URL to filename (use hash for uniqueness)
+    url_hash = hashlib.md5(insta_url.encode()).hexdigest()[:8]
+    safe_name = f"reel_{url_hash}.mp4"
+    return os.path.join(TMP_DIR, safe_name)
+
+def download_video(remote_url, local_path, insta_url):
+    """
+    Download video from remote URL to local path.
+    
+    Args:
+        remote_url (str): Remote video URL.
+        local_path (str): Local file path.
+        insta_url (str): For logging.
+    
+    Raises:
+        Exception: On download failure (e.g., HTTP error).
+    """
+    headers = {'User -Agent': 'Mozilla/5.0 (compatible; InstagramUploader/1.0)'}
     try:
-        response = requests.get(url, stream=True, timeout=30)
+        response = requests.get(remote_url, headers=headers, stream=True, timeout=30)
         response.raise_for_status()
-
-        total_size = int(response.headers.get('content-length', 0))
-        downloaded_size = 0
-
-        with open(filename, 'wb') as f:
+        with open(local_path, 'wb') as f:
             for chunk in response.iter_content(chunk_size=8192):
-                if chunk:
-                    f.write(chunk)
-                    downloaded_size += len(chunk)
-                    if total_size > 0:
-                        progress = (downloaded_size / total_size) * 100
-                        print(f"Download progress: {progress:.1f}%", end='\r')
-
-        if total_size > 0 and downloaded_size < total_size:
-            raise Exception(f"Incomplete download: {downloaded_size}/{total_size} bytes")
-
-        file_size = os.path.getsize(filename)
-        if file_size == 0:
-            raise Exception("Downloaded file is empty")
-
-        print(f"\nVideo downloaded successfully to {filename} ({file_size} bytes)")
-    except requests.exceptions.RequestException as e:
-        raise Exception(f"Network/HTTP error: {e}")
+                f.write(chunk)
+        if os.path.getsize(local_path) == 0:
+            raise ValueError("Downloaded file is empty")
+        print(f"Downloaded successfully ({os.path.getsize(local_path)} bytes)")
+    except requests.RequestException as e:
+        os.remove(local_path) if os.path.exists(local_path) else None
+        raise Exception(f"HTTP error: {e}")
     except Exception as e:
-        # Clean up empty/incomplete file
-        if os.path.exists(filename) and os.path.getsize(filename) == 0:
-            os.remove(filename)
-        log_error(insta_url, f"Download error: {e}")
-        raise
+        os.remove(local_path) if os.path.exists(local_path) else None
+        raise Exception(f"Download failed: {e}")
