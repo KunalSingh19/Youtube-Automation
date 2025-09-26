@@ -6,3 +6,5 @@ example for uploading only one video:
 ```
 python main.py --client-secrets creds.json --privacy-status public --upload-one
 ```
+
+Check https://github.com/KunalSingh19/Youtube-Automation/tree/server for full updated code
