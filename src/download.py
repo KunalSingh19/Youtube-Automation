@@ -3,7 +3,6 @@ import re
 import urllib.parse
 import hashlib
 import requests
-import subprocess
 from .utils import log_error
 
 TMP_FOLDER = "tmp"
@@ -30,32 +29,42 @@ def get_unique_filename(insta_url: str) -> str:
     return full_path
 
 def download_video(url: str, filename: str, insta_url: str):
+    """
+    Download video from remote URL to filename (only called for http/https URLs).
+    """
+    if not url.startswith(('http://', 'https://')):
+        raise ValueError("download_video called with non-remote URL")
+    
     print(f"Downloading video from {url} ...")
     try:
         response = requests.get(url, stream=True, timeout=30)
-        if response.status_code != 200:
-            raise Exception(f"Status code {response.status_code}")
+        response.raise_for_status()
+
+        total_size = int(response.headers.get('content-length', 0))
+        downloaded_size = 0
+
         with open(filename, 'wb') as f:
             for chunk in response.iter_content(chunk_size=8192):
                 if chunk:
                     f.write(chunk)
-        print(f"Video downloaded to {filename}")
+                    downloaded_size += len(chunk)
+                    if total_size > 0:
+                        progress = (downloaded_size / total_size) * 100
+                        print(f"Download progress: {progress:.1f}%", end='\r')
+
+        if total_size > 0 and downloaded_size < total_size:
+            raise Exception(f"Incomplete download: {downloaded_size}/{total_size} bytes")
+
+        file_size = os.path.getsize(filename)
+        if file_size == 0:
+            raise Exception("Downloaded file is empty")
+
+        print(f"\nVideo downloaded successfully to {filename} ({file_size} bytes)")
+    except requests.exceptions.RequestException as e:
+        raise Exception(f"Network/HTTP error: {e}")
     except Exception as e:
+        # Clean up empty/incomplete file
+        if os.path.exists(filename) and os.path.getsize(filename) == 0:
+            os.remove(filename)
         log_error(insta_url, f"Download error: {e}")
         raise
-
-def get_video_duration(filename: str) -> float:
-    try:
-        result = subprocess.run(
-            ['ffprobe', '-v', 'error', '-show_entries',
-             'format=duration', '-of',
-             'default=noprint_wrappers=1:nokey=1', filename],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            check=True
-        )
-        duration_str = result.stdout.decode().strip()
-        return float(duration_str)
-    except Exception as e:
-        print(f"Warning: Could not determine video duration: {e}")
-        return -1
