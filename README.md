@@ -1,9 +1,15 @@
 # Youtube-Automation
 A full youtube automation with advanced feature error logging and uploading video from instagram. It scrapes user liked reel from instagram and upload them to Youtube shorts
 
+
+How to copy this specific branch
 usage:
 ```
-python main.py --client-secrets creds.json --privacy-status public --upload-one
+git branch
+rm -rf Data  LICENSE  README.md  extra  main.py  src  tmp  upload_history.json
+ls
+git checkout -b server origin/server
+git pull
 ```
 
 # Instagram Reels to YouTube Uploader
