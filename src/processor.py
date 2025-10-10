@@ -5,7 +5,7 @@ Core logic for loading data, filtering, and processing uploads with success-base
 import json
 import os
 from . import download, upload, utils, history
-from .config import INSTAGRAM_JSON_FILE, UPLOAD_HISTORY_FILE
+from .config import INSTAGRAM_JSON_FILE, UPLOAD_HISTORY_FILE, TMP_DIR
 from .upload import QuotaExceededError
 
 def load_and_filter_data():
@@ -137,17 +137,35 @@ def process_uploads(account_services, num_accounts, new_items_list, target_succe
                 continue  # Skip error, continue to next video
             print(f"  - Using local file: {video_path}")
 
-        # Video file is ready - proceed to upload
-        tags = utils.extract_tags_from_caption(description)
+        # Get duration to check if it's a short (upscale only shorts)
         duration = utils.get_video_duration(video_path)
+        upscale = (duration != -1 and duration <= 60)
+        final_video_path = video_path
+
+        # Upscale if it's a short video
+        if upscale:
+            # Generate upscaled path (e.g., reel_hash_upscaled.mp4)
+            base_name = os.path.splitext(os.path.basename(video_path))[0]
+            upscaled_filename = f"{base_name}_upscaled.mp4"
+            upscaled_path = os.path.join(TMP_DIR, upscaled_filename)
+            
+            if utils.upscale_video(video_path, upscaled_path, insta_url):
+                final_video_path = upscaled_path
+                print(f"  - Using upscaled video: {upscaled_filename}")
+            else:
+                print(f"  - Upscale failed; falling back to original: {os.path.basename(video_path)}")
+                # Log already handled in upscale_video
+
         if duration != -1 and duration <= 60:
             print(f"  - Short video ({duration:.1f}s)")
 
+        # Video file is ready - proceed to upload
+        tags = utils.extract_tags_from_caption(description)
         class Options:
             pass
         options = Options()
         truncated_title = (description.strip()[:100] or f"#Shorts #YtShorts #InstagramReel_{video_index}")
-        options.file = video_path
+        options.file = final_video_path
         options.title = truncated_title
         options.description = description
         options.privacy_status = privacy_status
