@@ -7,7 +7,6 @@ usage:
 ```
 git clone https://github.com/KunalSingh19/Youtube-Automation/
 cd Youtube-Automation/
-git branch
 rm -rf Data  LICENSE  README.md  extra  main.py  src  tmp  upload_history.json
 ls
 git checkout -b server origin/server
