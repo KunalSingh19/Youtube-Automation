@@ -5,7 +5,7 @@ Core logic for loading data, filtering, and processing uploads with success-base
 import json
 import os
 from . import download, upload, utils, history
-from .config import INSTAGRAM_JSON_FILE, UPLOAD_HISTORY_FILE, TMP_DIR
+from .config import INSTAGRAM_JSON_FILE, UPLOAD_HISTORY_FILE
 from .upload import QuotaExceededError
 
 def load_and_filter_data():
@@ -89,15 +89,28 @@ def process_uploads(account_services, num_accounts, new_items_list, target_succe
         youtube = account_services[acc_name]
         print(f"Attempt #{video_index} for success #{uploaded_count + 1}/{target_successes} to account '{acc_name}': {insta_url}")
 
-        # Robust JSON parsing with validation
+        # Robust JSON parsing with validation (adapted to provided structure)
         try:
             media_details = post_data.get('media_details', [])
             if not media_details or len(media_details) == 0:
                 raise KeyError("No media_details")
-            video_url = media_details[0].get('url', '')  # Could be local path or remote URL
+            first_media = media_details[0]
+            if not isinstance(first_media, dict) or first_media.get('type') != 'video':
+                raise KeyError("First media is not a video (carousel/image?)")
+            video_url = first_media.get('url', '')  # Local relative path, e.g., "videos/reel.mp4"
             if not video_url:
                 raise KeyError("No url in media_details[0]")
+            # Resolve relative path to absolute (relative to project root)
+            video_path = os.path.abspath(os.path.join(os.getcwd(), video_url))
             description = post_data.get('post_info', {}).get('caption', '')
+            # Optional: Log dimensions from JSON
+            dimensions = first_media.get('dimensions', {})
+            dim_str = f" ({dimensions.get('width', 'N/A')}x{dimensions.get('height', 'N/A')})" if dimensions else ""
+            print(f"  - Parsed: Caption='{description[:50]}...', Video path={video_path}{dim_str}")
+            # Optional: Warn if url_list mismatches (redundant field)
+            url_list = post_data.get('url_list', [])
+            if url_list and video_url not in url_list:
+                print(f"  - Warning: media_details url not in url_list")
         except Exception as e:
             print(f"  - Skipped (JSON error: {e})")
             utils.log_error(insta_url, f"JSON error: {e}")
@@ -125,8 +138,7 @@ def process_uploads(account_services, num_accounts, new_items_list, target_succe
                 print(f"  - Using existing downloaded file: {local_filename}")
             video_path = local_filename
         else:
-            # Local path: Use directly if exists
-            video_path = video_url
+            # Local path: Use directly if exists (updated for relative paths)
             if not os.path.exists(video_path) or os.path.getsize(video_path) == 0:
                 reason = "File missing" if not os.path.exists(video_path) else "File empty"
                 print(f"  - Skipped ({reason}: {video_path}) - Continuing to next video")
@@ -137,35 +149,17 @@ def process_uploads(account_services, num_accounts, new_items_list, target_succe
                 continue  # Skip error, continue to next video
             print(f"  - Using local file: {video_path}")
 
-        # Get duration to check if it's a short (upscale only shorts)
+        # Video file is ready - proceed to upload
+        tags = utils.extract_tags_from_caption(description)
         duration = utils.get_video_duration(video_path)
-        upscale = (duration != -1 and duration <= 60)
-        final_video_path = video_path
-
-        # Upscale if it's a short video
-        if upscale:
-            # Generate upscaled path (e.g., reel_hash_upscaled.mp4)
-            base_name = os.path.splitext(os.path.basename(video_path))[0]
-            upscaled_filename = f"{base_name}_upscaled.mp4"
-            upscaled_path = os.path.join(TMP_DIR, upscaled_filename)
-            
-            if utils.upscale_video(video_path, upscaled_path, insta_url):
-                final_video_path = upscaled_path
-                print(f"  - Using upscaled video: {upscaled_filename}")
-            else:
-                print(f"  - Upscale failed; falling back to original: {os.path.basename(video_path)}")
-                # Log already handled in upscale_video
-
         if duration != -1 and duration <= 60:
             print(f"  - Short video ({duration:.1f}s)")
 
-        # Video file is ready - proceed to upload
-        tags = utils.extract_tags_from_caption(description)
         class Options:
             pass
         options = Options()
         truncated_title = (description.strip()[:100] or f"#Shorts #YtShorts #InstagramReel_{video_index}")
-        options.file = final_video_path
+        options.file = video_path
         options.title = truncated_title
         options.description = description
         options.privacy_status = privacy_status

@@ -12,8 +12,11 @@ from googleapiclient.http import MediaFileUpload, MediaIoBaseUpload
 from googleapiclient.errors import HttpError
 from .config import DEFAULT_PRIVACY_STATUS
 
-# Custom exception for quota issues
+# Custom exceptions
 class QuotaExceededError(Exception):
+    pass
+
+class FileError(Exception):
     pass
 
 # YouTube API constants
@@ -107,6 +110,7 @@ def get_authenticated_service(client_secrets_file, token_file):
                 with open(token_file, 'w', encoding='utf-8') as token:
                     token.write(credentials.to_json())
                 print(f"Token saved successfully to {token_file}!")
+                os.chmod(token_file, 0o600)  # Restrictive permissions
                 # Verify save
                 if os.path.exists(token_file) and os.path.getsize(token_file) > 0:
                     print("Token file verified (non-empty).")
@@ -188,7 +192,3 @@ def initialize_upload(youtube, options, insta_url):
             raise Exception(f"Unexpected upload error: {e}")
     
     raise Exception("Upload failed (max retries exceeded)")
-
-class FileError(Exception):
-    pass
-    
