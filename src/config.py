@@ -1,17 +1,17 @@
 """
-Configuration constants for the project.
+Configuration constants.
+Cross-platform paths (relative to script dir).
 """
 
-import os
+import os  # For path utilities
 
-# File paths (relative to project root)
-INSTAGRAM_JSON_FILE = os.path.join("Data", "reelsData.json")
-UPLOAD_HISTORY_FILE = "upload_history.json"
-ERROR_LOG_FILE = "error_log.txt"
-TMP_DIR = "tmp"
-DEFAULT_CREDS_DIR = "./creds"
-DEFAULT_BATCH_SIZE = 3
-DEFAULT_PRIVACY_STATUS = "public"
+# Files and directories (relative paths)
+INSTAGRAM_JSON_FILE = 'Data/reelsData.json'
+UPLOAD_HISTORY_FILE = 'upload_history.json'
+DEFAULT_CLIENT_SECRETS_FILE = 'client_secrets.json'
+DEFAULT_ACCOUNTS_DIR = ''  # Subdir for multiple accounts
+TMP_DIR = os.path.join(os.getcwd(), 'tmp')  # Full path to tmp dir (cross-platform)
+ERROR_LOG_FILE = 'errors.log'  # Error log file (relative path)
 
-# Ensure tmp dir exists
-os.makedirs(TMP_DIR, exist_ok=True)
+# YouTube defaults
+DEFAULT_PRIVACY_STATUS = 'public'  # Fallback privacy (public/private/unlisted)

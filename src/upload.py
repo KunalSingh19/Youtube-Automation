@@ -146,6 +146,10 @@ def initialize_upload(youtube, options, insta_url):
     if not os.path.exists(options.file):
         raise FileError(f"Video file not found: {options.file}")
     
+    # Ensure #Shorts is in tags for Shorts eligibility
+    if 'shorts' not in [tag.lower() for tag in options.tags]:
+        options.tags.append('#Shorts')
+    
     body = dict(
         snippet=dict(
             title=options.title,
@@ -154,41 +158,134 @@ def initialize_upload(youtube, options, insta_url):
             categoryId="22"  # People & Blogs (default for shorts/reels)
         ),
         status=dict(
-            privacyStatus=options.privacy_status,
+            privacyStatus=options.privacy_status or DEFAULT_PRIVACY_STATUS,
             selfDeclaredMadeForKids=False
         )
     )
     
-    # Insert request (resumable)
+    # Insert request (resumable upload initiation)
     insert_request = youtube.videos().insert(
         part=",".join(body.keys()),
         body=body,
-        media_body=MediaFileUpload(options.file, chunksize=-1, resumable=True)
+        media_body=MediaFileUpload(
+            options.file,
+            chunksize=-1,  # Full file upload (adjust for large files if needed)
+            resumable=True
+        )
     )
     
-    # Retry logic for quota/transient errors
+    # Execute upload with retries (exponential backoff)
     max_retries = 3
-    tries = 0
-    while tries < max_retries:
+    retry_delay = 1  # seconds
+    for attempt in range(max_retries):
         try:
+            print(f"  - Uploading... (attempt {attempt + 1}/{max_retries})")
             response = insert_request.execute()
-            video_id = response['id']
-            print(f"Upload complete: https://youtu.be/{video_id}")
+            video_id = response.get('id')
+            if not video_id:
+                raise ValueError("No video ID in response")
+            print(f"  - Upload completed! Video ID: {video_id}")
             return video_id
-        except HttpError as e:
-            if e.resp.status == 403 and 'quotaExceeded' in str(e):
-                raise QuotaExceededError("YouTube API quota exceeded")
-            elif e.resp.status >= 500:
-                tries += 1
-                if tries < max_retries:
-                    print(f"Retry {tries}/{max_retries} after error {e.resp.status}")
+        except HttpError as err:
+            error_reason = err.resp.status if hasattr(err, 'resp') else str(err)
+            if error_reason == 403 and "quotaExceeded" in err._get_reason():
+                print(f"  - Quota exceeded (HTTP 403). Stopping.")
+                raise QuotaExceededError(f"Quota exceeded during upload: {err}")
+            elif error_reason == 500 or error_reason == 503:
+                # Server error: Retry
+                if attempt < max_retries - 1:
+                    print(f"  - Server error (HTTP {error_reason}). Retrying in {retry_delay}s...")
                     import time
-                    time.sleep(60 * tries)  # Exponential backoff
+                    time.sleep(retry_delay)
+                    retry_delay *= 2  # Exponential backoff
+                    continue
                 else:
-                    raise Exception(f"Upload failed after {max_retries} retries: {e}")
+                    raise  # No more retries
             else:
-                raise Exception(f"Upload error {e.resp.status}: {e}")
+                # Other errors: Fail
+                print(f"  - Upload failed (HTTP {error_reason}): {err}")
+                raise
         except Exception as e:
-            raise Exception(f"Unexpected upload error: {e}")
+            if attempt < max_retries - 1:
+                print(f"  - Unexpected error: {e}. Retrying in {retry_delay}s...")
+                import time
+                time.sleep(retry_delay)
+                retry_delay *= 2
+                continue
+            else:
+                print(f"  - Upload failed after {max_retries} attempts: {e}")
+                raise
+
+def get_account_services(accounts_dir, client_secrets_file, target_accounts=None):
+    """
+    Load YouTube accounts from directory (one client_secrets per account).
+    If target_accounts provided (e.g., ['ken']), only load those (no scanning others).
+    Accounts are subdirs directly under accounts_dir (e.g., ./creds/ken/client_secrets.json).
     
-    raise Exception("Upload failed (max retries exceeded)")
+    Args:
+        accounts_dir (str): Directory with account subdirs (e.g., './creds').
+        client_secrets_file (str): Fallback single client_secrets path (if no accounts_dir).
+        target_accounts (list): Specific account names to load (e.g., ['ken']); if None, load all.
+    
+    Returns:
+        dict: {account_name: youtube_service}
+    
+    Raises:
+        ValueError: If no valid accounts.
+    """
+    account_services = {}
+    if os.path.exists(accounts_dir) and os.path.isdir(accounts_dir):
+        if target_accounts:
+            # Single-account mode: Only load specified accounts (no full scan)
+            print(f"Loading specified account(s): {', '.join(target_accounts)} from '{accounts_dir}'...")
+            for acc_name in target_accounts:
+                acc_path = os.path.join(accounts_dir, acc_name)
+                if not os.path.isdir(acc_path):
+                    print(f"  - Warning: Account dir '{acc_path}' not found")
+                    continue
+                secrets_path = os.path.join(acc_path, 'client_secrets.json')
+                token_path = os.path.join(acc_path, 'token.json')
+                if os.path.exists(secrets_path):
+                    try:
+                        youtube = get_authenticated_service(secrets_path, token_path)
+                        account_services[acc_name] = youtube
+                        print(f"  - Loaded account '{acc_name}'")
+                    except Exception as e:
+                        print(f"  - Failed to load account '{acc_name}': {e}")
+                else:
+                    print(f"  - Skipping '{acc_name}': No client_secrets.json in {acc_path}")
+        else:
+            # Multi-account mode: Load all valid subdirs
+            print(f"Loading all accounts from '{accounts_dir}' (direct subdirs)...")
+            for acc_name in sorted(os.listdir(accounts_dir)):
+                acc_path = os.path.join(accounts_dir, acc_name)
+                if not os.path.isdir(acc_path):
+                    continue
+                secrets_path = os.path.join(acc_path, 'client_secrets.json')
+                token_path = os.path.join(acc_path, 'token.json')
+                if os.path.exists(secrets_path):
+                    try:
+                        youtube = get_authenticated_service(secrets_path, token_path)
+                        account_services[acc_name] = youtube
+                        print(f"  - Loaded account '{acc_name}'")
+                    except Exception as e:
+                        print(f"  - Failed to load account '{acc_name}': {e}")
+                else:
+                    print(f"  - Skipping '{acc_name}': No client_secrets.json")
+    else:
+        # Fallback to single account
+        print(f"No accounts dir found. Using single account with '{client_secrets_file}'...")
+        token_file = 'token.json'  # Single token in root
+        try:
+            youtube = get_authenticated_service(client_secrets_file, token_file)
+            account_services['default'] = youtube
+            print("  - Loaded single 'default' account")
+        except Exception as e:
+            raise ValueError(f"Failed to load single account: {e}")
+    
+    if not account_services:
+        raise ValueError("No valid YouTube accounts loaded!")
+    
+    num_accounts = len(account_services)
+    print(f"Total active accounts: {num_accounts}")
+    return account_services, num_accounts

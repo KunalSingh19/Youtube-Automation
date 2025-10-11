@@ -1,131 +1,128 @@
+#!/usr/bin/env python3
 """
-Entry point for the Instagram to YouTube uploader.
+Main entry point for YouTube upload automation from Instagram JSON.
+Supports multiple accounts, one-per-account mode, privacy settings, upscaling.
+Cross-platform: Windows, Linux, macOS, Termux.
 """
 
-import sys
 import argparse
-from src import config, accounts, processor, history
+import os
+import shutil
+import sys
+from src import processor, upload, history
 from src.config import (
-    DEFAULT_BATCH_SIZE, 
-    DEFAULT_PRIVACY_STATUS, 
-    DEFAULT_CREDS_DIR, 
-    UPLOAD_HISTORY_FILE
+    INSTAGRAM_JSON_FILE, UPLOAD_HISTORY_FILE,
+    DEFAULT_CLIENT_SECRETS_FILE, DEFAULT_ACCOUNTS_DIR
 )
-from src.upload import QuotaExceededError
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Upload Instagram Reels to YouTube Shorts.")
+    parser.add_argument('--creds-dir', default='.', help="Directory for credentials (default: .)")
+    parser.add_argument('--accounts', nargs='+', help="Account names (e.g., 'ken' or 'ken jill')")
+    parser.add_argument('--privacy-status', default='private', choices=['public', 'private', 'unlisted'],
+                        help="YouTube privacy status (default: private)")
+    parser.add_argument('--one-per-account', action='store_true',
+                        help="Upload only one video per account (default: all to round-robin)")
+    parser.add_argument('--target', type=int, default=5,
+                        help="Target successful uploads (default: 5; ignored in one-per-account)")
+    parser.add_argument('--upscale', action='store_true',
+                        help="Upscale videos 2x (to ~1080x1920) using FFmpeg before upload (default: off)")
+    return parser.parse_args()
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Upload Instagram videos to YouTube (multi-account support). "
-                   "Loads videos from reelsData.json, downloads if needed, and uploads "
-                   "with history tracking to avoid duplicates. Supports round-robin "
-                   "distribution across accounts and success-based batching (skips errors)."
-    )
-    parser.add_argument(
-        "--creds-dir", 
-        default=DEFAULT_CREDS_DIR, 
-        help="Directory containing subfolders for each account's credentials (e.g., ./creds/account1/client_secrets.json). Default: ./creds"
-    )
-    parser.add_argument(
-        "--accounts", 
-        help="Comma-separated list of specific account subfolder names to use (e.g., 'account1,account2'). Skips others in the creds dir."
-    )
-    parser.add_argument(
-        "--all-accounts", 
-        action="store_true", 
-        help="Automatically discover and use all valid account subfolders in --creds-dir (mutually exclusive with --accounts)."
-    )
-    parser.add_argument(
-        "--privacy-status", 
-        default=DEFAULT_PRIVACY_STATUS, 
-        choices=["public", "private", "unlisted"], 
-        help="Privacy status for uploaded YouTube videos. Options: public (visible to everyone), private (only you), unlisted (link-only). Default: private"
-    )
-    parser.add_argument(
-        "--batch-size", 
-        type=int, 
-        default=DEFAULT_BATCH_SIZE, 
-        help="Target number of successful uploads to achieve (global across accounts). The script skips errors/failures and continues until this many successes or no more new videos. Default: 5"
-    )
-    parser.add_argument(
-        "--upload-one", 
-        action="store_true", 
-        help="Special mode: Target exactly 1 successful upload (to the first account). Skips errors and keeps trying new videos until achieved (overrides --batch-size)."
-    )
-    parser.add_argument(
-        "--one-per-account", 
-        action="store_true", 
-        help="Special mode: Target exactly 1 successful upload per active account (total = number of accounts). Distributes via round-robin, skips errors, and continues until achieved (overrides --batch-size; mutually exclusive with --upload-one)."
-    )
-
-    args = parser.parse_args()
-    batch_limit = args.batch_size
-    upload_one_mode = args.upload_one
-    one_per_account_mode = args.one_per_account
-
-    # Mutual exclusivity checks
-    if args.accounts and args.all_accounts:
-        parser.error("--accounts and --all-accounts are mutually exclusive.")
-    if upload_one_mode and one_per_account_mode:
-        parser.error("--upload-one and --one-per-account are mutually exclusive.")
-
-    # Load upload history once (for updates in processor)
-    upload_history = history.load_upload_history(UPLOAD_HISTORY_FILE)
-
-    # Get list of account names
+    args = parse_args()
+    
+    # Cross-platform tmp dir setup (creates if needed)
+    tmp_dir = os.path.join(os.getcwd(), 'tmp')
+    os.makedirs(tmp_dir, exist_ok=True)
+    print(f"Temporary directory: {tmp_dir}")
+    
     try:
-        account_names = accounts.get_account_names(args.creds_dir, args.accounts, args.all_accounts)
-    except ValueError as e:
-        print(f"Error: {e}")
-        sys.exit(1)
-    print(f"Using accounts: {', '.join(account_names)} (from {args.creds_dir})")
-
-    # Load and filter data (new items list)
-    try:
-        new_items_list, total_available = processor.load_and_filter_data()
-    except (FileNotFoundError, ValueError) as e:
-        print(f"Error: {e}")
-        sys.exit(1)
-
-    # Authenticate accounts
-    try:
-        account_services, num_accounts = accounts.authenticate_accounts(args.creds_dir, account_names)
-    except ValueError as e:
-        print(f"Error: {e}")
-        sys.exit(1)
-
-    # Determine target successes based on mode
-    if one_per_account_mode:
-        target_successes = num_accounts
-        print(f"One-per-account mode: Targeting {target_successes} successful uploads (one per account).")
-    elif upload_one_mode:
-        target_successes = 1
-        print("Upload-one mode: Targeting 1 successful upload.")
-    else:
-        target_successes = batch_limit
-        print(f"Batch mode: Targeting {target_successes} successful uploads (skipping errors).")
-
-    # Process uploads (pass the shared upload_history)
-    try:
-        uploaded_count, skipped_count = processor.process_uploads(
-            account_services, num_accounts, new_items_list, 
-            target_successes, args.privacy_status, upload_history
+        # Load accounts (pass target_accounts for single-account focus)
+        accounts_dir = os.path.join(args.creds_dir, DEFAULT_ACCOUNTS_DIR)
+        client_secrets_file = os.path.join(args.creds_dir, DEFAULT_CLIENT_SECRETS_FILE)
+        all_account_services, num_accounts = upload.get_account_services(
+            accounts_dir, client_secrets_file, target_accounts=args.accounts
         )
-    except QuotaExceededError:
-        print("\nGlobal quota exceeded - stopping all uploads.")
-        sys.exit(1)
-
-    # Summary
-    if uploaded_count >= target_successes:
-        print(f"\nTarget achieved: {uploaded_count} successful uploads out of {total_available} available new items.")
-    else:
-        print(f"\nStopped: {uploaded_count} successful uploads (target was {target_successes}), {skipped_count} skipped out of {total_available} available new items.")
+        
+        if args.accounts:
+            # Filter to specified accounts (case-sensitive match)
+            account_services = {
+                name: svc for name, svc in all_account_services.items() if name in args.accounts
+            }
+            if not account_services:
+                raise ValueError(f"No accounts found matching: {args.accounts}")
+            print(f"Using accounts: {', '.join(args.accounts)} (from {args.creds_dir})")
+            num_accounts = len(account_services)
+        else:
+            account_services = all_account_services
+            print(f"Using all accounts from {accounts_dir if os.path.exists(accounts_dir) else args.creds_dir}")
+        
+        # Authenticate each (already handled in get_account_services, but confirm)
+        for acc_name in account_services:
+            print(f"Authenticated account '{acc_name}' successfully.")
+        
+        # Determine target successes
+        if args.one_per_account:
+            target_successes = num_accounts
+            print(f"One-per-account mode: Targeting {target_successes} successful uploads (one per account).")
+        else:
+            target_successes = args.target
+            print(f"Round-robin mode: Targeting {target_successes} successful uploads across {num_accounts} accounts.")
+        
+        # Load and filter data
+        new_items_list, total_available = processor.load_and_filter_data()
+        
+        # Load history for processing
+        upload_history = history.load_upload_history(UPLOAD_HISTORY_FILE)
+        
+        # Process uploads (pass upscale flag)
+        uploaded_count, skipped_count = processor.process_uploads(
+            account_services, num_accounts, new_items_list,
+            target_successes, args.privacy_status, upload_history,
+            upscale=args.upscale
+        )
+        
+        # Summary
+        print(f"\n=== SUMMARY ===")
+        print(f"Target successes: {target_successes}")
+        print(f"Uploaded: {uploaded_count}")
+        print(f"Skipped/Failed: {skipped_count}")
+        print(f"Total processed: {uploaded_count + skipped_count}/{total_available}")
+        if uploaded_count > 0:
+            print("Success! Check YouTube for new Shorts.")
+        else:
+            print("No uploads completed. Check errors.log for details.")
     
-    if uploaded_count == 0:
-        print("No successful uploads! Check error_log.txt for details.")
+    except upload.QuotaExceededError:
+        print("\nStopped due to YouTube quota exceeded.")
         sys.exit(1)
-    
-    print("History saved.")
-    sys.exit(0)
+    except FileNotFoundError as e:
+        print(f"File error: {e}")
+        sys.exit(1)
+    except ValueError as e:
+        print(f"Value error: {e}")
+        sys.exit(1)
+    except KeyboardInterrupt:
+        print("\nInterrupted by user.")
+        sys.exit(1)
+    except Exception as e:
+        print(f"Unexpected error: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+    finally:
+        # Cross-platform tmp cleanup (recursive, safe)
+        if os.path.exists(tmp_dir):
+            try:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+                print(f"Cleaned up temporary directory: {tmp_dir}")
+            except Exception as cleanup_err:
+                print(f"Warning: Could not fully clean up {tmp_dir}: {cleanup_err}")
+                # List remaining files for debug
+                remaining = [f for f in os.listdir(tmp_dir) if os.path.isfile(os.path.join(tmp_dir, f))]
+                if remaining:
+                    print(f"  Remaining files: {remaining}")
 
 if __name__ == "__main__":
     main()

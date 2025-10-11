@@ -55,7 +55,7 @@ def load_and_filter_data():
     new_items_list = list(new_items.items())
     return new_items_list, len(new_items_list)
 
-def process_uploads(account_services, num_accounts, new_items_list, target_successes, privacy_status, upload_history):
+def process_uploads(account_services, num_accounts, new_items_list, target_successes, privacy_status, upload_history, upscale=False):
     """
     Process uploads in a loop until target successes, skipping errors.
     
@@ -66,6 +66,7 @@ def process_uploads(account_services, num_accounts, new_items_list, target_succe
         target_successes (int): Target number of successful uploads.
         privacy_status (str): YouTube privacy status.
         upload_history (dict): Current history dict (updated in-place).
+        upscale (bool): Whether to upscale low-res videos.
     
     Returns:
         tuple: (uploaded_count: int, skipped_count: int)
@@ -149,29 +150,88 @@ def process_uploads(account_services, num_accounts, new_items_list, target_succe
                 continue  # Skip error, continue to next video
             print(f"  - Using local file: {video_path}")
 
-        # Video file is ready - proceed to upload
-        tags = utils.extract_tags_from_caption(description)
+        # Video file is ready - check duration for Shorts eligibility
         duration = utils.get_video_duration(video_path)
-        if duration != -1 and duration <= 60:
-            print(f"  - Short video ({duration:.1f}s)")
+        if duration == -1:
+            print(f"  - Skipped (duration unavailable: {video_path}) - Continuing to next video")
+            utils.log_error(insta_url, "Duration check failed")
+            upload_history[insta_url] = {"status": "failed", "reason": "Duration unavailable"}
+            history.save_upload_history(UPLOAD_HISTORY_FILE, upload_history)
+            skipped_count += 1
+            continue
+        if duration > 60:
+            print(f"  - Skipped (too long for Shorts: {duration:.1f}s) - Continuing to next video")
+            utils.log_error(insta_url, f"Duration too long: {duration}s")
+            upload_history[insta_url] = {"status": "failed", "reason": f"Too long for Shorts ({duration}s)"}
+            history.save_upload_history(UPLOAD_HISTORY_FILE, upload_history)
+            skipped_count += 1
+            continue
+        print(f"  - Valid Shorts video ({duration:.1f}s)")
 
+        # Optional: Upscale if enabled and resolution is low (check width <1080)
+        processed_path = video_path
+        if upscale:
+            width = utils.get_video_width(video_path)
+            if width < 1080 and utils.has_ffmpeg():
+                upscaled_filename = video_path.replace('.mp4', '_upscaled.mp4')
+                print(f"  - Upscaling low-res video ({width}px width) to 2x...")
+                try:
+                    success = utils.upscale_video(video_path, upscaled_filename)
+                    if success:
+                        processed_path = upscaled_filename
+                        # Delete original temp after successful upscale
+                        if video_path.startswith(os.path.join(os.getcwd(), 'tmp')):
+                            os.remove(video_path)
+                            print(f"  - Deleted original temp: {video_path}")
+                        print(f"  - Upscale complete: {processed_path}")
+                    else:
+                        print(f"  - Upscale failed; using original: {video_path}")
+                except Exception as upscale_err:
+                    print(f"  - Upscale error ({str(upscale_err)[:50]}); using original")
+            else:
+                if width >= 1080:
+                    print(f"  - Skipping upscale (already high-res: {width}px width)")
+                else:
+                    print(f"  - Skipping upscale (FFmpeg not available)")
+        else:
+            print(f"  - Upscaling disabled")
+
+        # Proceed to upload
+        tags = utils.extract_tags_from_caption(description)
         class Options:
             pass
         options = Options()
-        truncated_title = (description.strip()[:100] or f"#Shorts #YtShorts #InstagramReel_{video_index}")
-        options.file = video_path
+        # Clean title: Replace newlines with spaces, collapse whitespace, truncate to 100 chars
+        cleaned_desc = description.replace('\n', ' ').strip()
+        base_title = ' '.join(cleaned_desc.split())[:100]  # Collapse multiple spaces
+        if not base_title or len(base_title) < 3:  # Fallback if empty/short after cleaning
+            base_title = f"#Shorts #InstagramReel_{video_index}"
+        # Enforce #Shorts in title for Shorts eligibility
+        if not base_title.lower().startswith('#shorts'):
+            truncated_title = f"#Shorts {base_title}"
+            truncated_title = truncated_title[:100]  # Ensure <=100 after prepend
+        else:
+            truncated_title = base_title[:100]
+        options.file = processed_path  # Use processed (upscaled) file
         options.title = truncated_title
-        options.description = description
+        options.description = description  # Keep original description (newlines OK there)
         options.privacy_status = privacy_status
-        options.tags = tags
+        options.tags = tags + ['#Shorts', '#YouTubeShorts']  # Reinforce tags
 
-        print(f"  - Uploading to '{acc_name}' (title: '{truncated_title[:50]}...')")
+        print(f"  - Uploading to '{acc_name}' as Short (title: '{truncated_title[:50]}...')")
         try:
             video_id = upload.initialize_upload(youtube, options, insta_url)
             print(f"  - SUCCESS on '{acc_name}'! ID: {video_id}")
             # Success: Update history (with account)
             upload_history[insta_url] = {"status": "success", "youtube_video_id": video_id, "account": acc_name}
             history.save_upload_history(UPLOAD_HISTORY_FILE, upload_history)
+            # Auto-delete temp file after success (if in tmp/, including upscaled)
+            if processed_path.startswith(os.path.join(os.getcwd(), 'tmp')):
+                try:
+                    os.remove(processed_path)
+                    print(f"  - Deleted temp file: {processed_path}")
+                except OSError as del_err:
+                    print(f"  - Warning: Could not delete {processed_path}: {del_err}")
             uploaded_count += 1
             print(f"  - Success #{uploaded_count}/{target_successes} achieved - Continuing for target...")
             if uploaded_count >= target_successes:
