@@ -11,222 +11,277 @@ git checkout -b server origin/server
 git pull
 ```
 
-# Instagram Reels to YouTube Uploader
+# YouTube Shorts Automation from Instagram Reels
 
-[![Python](https://img.shields.io/badge/python-3.7%2B-blue)](https://www.python.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python](https://img.shields.io/badge/Python-3.8%2B-blue)](https://www.python.org/) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-This Python project automates the process of downloading Instagram Reels (videos) from a JSON file (containing either remote URLs or local paths) and uploading them to YouTube. It supports multiple YouTube accounts for distributed uploads, batch processing, deduplication, error handling, and history tracking to avoid re-uploading failed or successful videos.
+## Overview
 
-The script is modular, efficient for small-to-medium batches, and handles OAuth authentication for YouTube. It's designed for content creators who want to repurpose Instagram content as YouTube Shorts or videos.
+This Python script automates uploading Instagram Reels (videos) to YouTube as **Shorts-only** content. It:
+- Downloads videos from Instagram JSON data.
+- Filters for Shorts-eligible videos (≤60 seconds, vertical format).
+- Optionally upscales low-resolution videos (e.g., 540p to 1080p) using FFmpeg for better quality.
+- Uploads to one or multiple YouTube accounts with cleaned titles (adds `#Shorts`), tags, and privacy settings.
+- Tracks history to avoid re-uploads and logs errors.
+- Supports round-robin distribution across accounts or "one per account" mode.
+
+**Why Use This?**  
+Save time posting Reels to YouTube Shorts. Ideal for content creators with multiple channels. Beginner-friendly with step-by-step setup—no coding required beyond running commands.
+
+**Cross-Platform**: Works on **Windows**, **Linux**, **macOS**, and **Termux (Android)**.
+
+**Limitations**:  
+- YouTube daily quota (~10-50 uploads/account; stops on exceed).  
+- Requires Instagram JSON (generate via scraper like Instaloader or browser extension).  
+- Videos must be vertical (9:16) for best Shorts results (script assumes this from Reels).
 
 ## Features
-- **Flexible Input**: JSON file with Instagram post data (supports remote video URLs for auto-download or pre-existing local paths).
-- **Auto-Download**: Downloads remote videos only if not already present (saves to `tmp/` folder with unique filenames).
-- **Multi-Account Support**: Upload to multiple YouTube channels/accounts via a credentials directory (round-robin distribution to balance load).
-- **Batch Processing**: Limit uploads to a specified number (global across accounts).
-- **History Tracking**: Uses `upload_history.json` to skip previously uploaded or failed videos.
-- **Error Logging**: Logs issues to `error_log.txt` (e.g., download failures, API errors).
-- **YouTube Integration**: Resumable uploads, quota retry logic, privacy settings, tag extraction from captions.
-- **Shorts Optimization**: Detects short videos (<60s) and suggests titles/tags.
-- **Modes**: `--upload-one` for incremental runs; deduplication for clean JSON.
+- **Shorts Optimization**: Auto-skips >60s videos; adds `#Shorts` to title/tags; uses category "People & Blogs".
+- **Multi-Account Support**: Upload to one or many YouTube channels (e.g., 'ken', 'itzken').
+- **One-Per-Account Mode**: Limit to 1 upload per account (great for testing).
+- **Upscaling**: Optional 2x resolution boost (e.g., 540x960 → 1080x1920) with FFmpeg (Lanczos filter, H.264 encoding).
+- **Error Handling**: Skips failures, logs to `errors.log`, cleans up temp files.
+- **History Tracking**: JSON-based (`upload_history.json`) to skip uploaded videos.
+- **Privacy Options**: Public, private, or unlisted.
+- **Cross-Platform Paths**: Handles Windows `\` and Unix `/` seamlessly.
 
-## Requirements
-- **Python**: 3.7 or higher.
-- **Dependencies**:
-  - `google-api-python-client` (for YouTube API)
-  - `google-auth-oauthlib` (for OAuth)
-  - `google-auth` (transport)
-  - `requests` (for downloading videos)
-  - `ffmpeg` (system install required for video duration checks via `ffprobe`; optional but recommended).
-- **System Tools**: `ffprobe` (from FFmpeg) for video duration. Install via:
-  - Ubuntu/Debian: `sudo apt install ffmpeg`
-  - macOS: `brew install ffmpeg`
-  - Windows: Download from [FFmpeg.org](https://ffmpeg.org/download.html) and add to PATH.
+## Prerequisites (Beginner Setup)
 
-Install Python dependencies:
-```bash
-pip install google-api-python-client google-auth-oauthlib google-auth requests
+### 1. Install Python
+- Download Python 3.8+ from [python.org](https://www.python.org/downloads/).
+- **Windows**: Check "Add Python to PATH" during install. Restart Command Prompt (CMD).
+- Verify: Open CMD and run `python --version` (should show 3.8+).
+- **Linux/macOS/Termux**: `sudo apt install python3` (or `pkg install python` in Termux).
+
+### 2. Install Dependencies
+Open CMD in your project folder and run:
 ```
-
-## Installation and Setup
-
-### 1. Clone the Repository
-```bash
-git clone https://github.com/yourusername/instagram-to-youtube-uploader.git
-cd instagram-to-youtube-uploader
+pip install google-api-python-client google-auth-oauthlib google-auth-httplib2 requests
 ```
+- If `pip` not found: Run `python -m ensurepip --upgrade` first.
+- **Termux**: `pkg install python ffmpeg` (includes FFmpeg).
 
-### 2. Google Cloud Setup for YouTube API
-For each YouTube account/channel:
-1. Go to [Google Cloud Console](https://console.cloud.google.com/).
-2. Create a new project (or use existing).
-3. Enable the **YouTube Data API v3**.
-4. Create OAuth 2.0 credentials:
-   - Go to **APIs & Services > Credentials > Create Credentials > OAuth client ID**.
-   - Application type: **Desktop application**.
-   - Download the `client_secrets.json` file.
-5. Add the scope: `https://www.googleapis.com/auth/youtube.upload` (for uploads).
-6. **Important**: Each account needs its own Google Cloud project/credentials if you want separate quotas. For multi-account, create one per channel.
+### 3. Install FFmpeg (For Duration Check & Upscaling)
+FFmpeg is required for video processing (optional for basic uploads, but recommended).
+- **Windows**:
+  1. Download from [ffmpeg.org/download.html#build-windows](https://ffmpeg.org/download.html#build-windows) (e.g., "Windows builds by gyan.dev" → `ffmpeg-release-essentials.zip`).
+  2. Extract to `C:\ffmpeg`.
+  3. Add to PATH: Search "Environment Variables" in Windows Start → Edit System Variables → Path → Add `C:\ffmpeg\bin` → OK → Restart CMD.
+  4. Verify: `ffmpeg -version` and `ffprobe -version` (should print version info).
+- **Linux/macOS**: `sudo apt install ffmpeg` (Ubuntu/Debian) or `brew install ffmpeg` (macOS).
+- **Termux**: `pkg install ffmpeg`.
+- If missing: Script skips upscaling and warns (uploads original).
 
-### 3. Directory Structure
-Organize your files as follows:
-```
-project-root/
-├── main.py                  # Main script
-├── src/                     # Source modules
-│   ├── __init__.py
-│   ├── download.py          # Download logic
-│   ├── upload.py            # YouTube upload
-│   ├── utils.py             # Utilities (logging, tags, duration)
-│   └── history.py           # History management
-├── Data/                    # Input data
-│   └── reelsData.json       # Instagram JSON (see format below)
-├── creds/                   # Multi-account credentials (default)
-│   ├── account1/            # Subfolder per account
-│   │   ├── client_secrets.json  # From Google Cloud
-│   │   └── token.json       # Generated on first run (OAuth token)
-│   └── account2/
-│       ├── client_secrets.json
-│       └── token.json
-├── tmp/                     # Auto-created: Downloaded videos
-├── upload_history.json      # Auto-generated: Tracks uploads/failures
-└── error_log.txt            # Auto-generated: Error logs
-```
+### 4. Set Up Google YouTube API (Per Account)
+For each account (e.g., 'ken'), create OAuth credentials:
+1. Go to [Google Cloud Console](https://console.cloud.google.com/apis/credentials).
+2. Create a new project (or select existing) → Enable "YouTube Data API v3" (search APIs & Services → Library).
+3. Go to "Credentials" → "Create Credentials" → "OAuth client ID".
+4. App type: **Desktop application** (name it e.g., "YouTube Uploader").
+5. Download the JSON file as `client_secrets.json`.
+6. Place it in your account folder (see Structure below).
+- **Scopes**: The script uses `https://www.googleapis.com/auth/youtube.upload` (upload only).
+- **Quotas**: Default 10,000 units/day (enough for ~50 uploads). Request increase if needed.
+- Repeat for each account (e.g., separate projects or same project with multiple clients).
 
-- **creds/**: Default path (change with `--creds-dir`). Each subfolder is an account. `token.json` is created automatically on first authentication (browser opens for OAuth consent).
-- **tmp/**: Auto-created for remote downloads. Files are named based on Instagram URL (sanitized + hash if duplicate).
-
-### 4. Input JSON Format (`Data/reelsData.json`)
-The JSON is a dictionary where keys are Instagram post URLs, and values are post data. Example:
-```json
-{
-  "https://www.instagram.com/reel/ABC123/": {
-    "media_details": [
-      {
-        "url": "https://scontent.cdninstagram.com/video.mp4"  // Remote URL (auto-download) OR local path (e.g., "./videos/reel1.mp4")
-      }
-    ],
-    "post_info": {
-      "caption": "Cool reel! #shorts #instagram"
-    }
-  },
-  "https://www.instagram.com/reel/DEF456/": {
-    "media_details": [
-      {
-        "url": "./local_videos/reel2.mp4"  // Local path (used directly if exists)
-      }
-    ],
-    "post_info": {
-      "caption": "Another video #tags"
-    }
-  }
-}
-```
-- **media_details[0].url**: Either remote (http/https) for download or local path (relative/absolute).
-- **post_info.caption**: Used for title (truncated to 100 chars), description, and tag extraction (#hashtags).
-- Generate this JSON via an Instagram scraper (not included—use tools like Instaloader or custom script).
-
-## Usage
-
-Run the script with Python:
-```bash
-python main.py [arguments]
-```
-
-### CLI Arguments
-- `--creds-dir <path>`: Directory with account subfolders (default: `./creds`).
-- `--accounts <comma-separated>`: Specific accounts (e.g., `account1,account2`). Skips others.
-- `--all-accounts`: Use all valid subfolders in `--creds-dir` (mutually exclusive with `--accounts`).
-- `--privacy-status <status>`: Video privacy (default: `private`; options: `public`, `private`, `unlisted`).
-- `--batch-size <int>`: Max new videos to process (default: 5). Global limit across accounts (round-robin distribution).
-- `--upload-one`: Process exactly one new video (to first account) and stop.
-
-If no `--accounts` or `--all-accounts`, uses the first valid subfolder (single-account mode).
-
-### Examples
-1. **Single Account Upload (Batch of 5)**:
-   ```bash
-   python main.py --creds-dir ./creds --batch-size 5 --privacy-status unlisted
-   ```
-   - Uses first account (e.g., `creds/account1/`).
-   - Attempts up to 5 new videos.
-
-2. **Multi-Account (Specific Accounts, Batch 10)**:
-   ```bash
-   python main.py --creds-dir ./creds --accounts account1,account2 --batch-size 10
-   ```
-   - Distributes 10 videos: ~5 per account (round-robin).
-   - If 2 accounts: account1 gets videos 1,3,5,7,9; account2 gets 2,4,6,8,10.
-
-3. **All Accounts (Batch 6)**:
-   ```bash
-   python main.py --creds-dir ./creds --all-accounts --batch-size 6 --privacy-status public
-   ```
-   - Uses all subfolders with `client_secrets.json`.
-   - Distributes across all (e.g., 3 accounts: ~2 per account).
-
-4. **Upload One Video**:
-   ```bash
-   python main.py --creds-dir ./creds --accounts account1 --upload-one
-   ```
-   - Uploads exactly one new video to `account1` and stops.
-
-5. **First Run (OAuth)**:
-   - On first use per account, a browser opens for Google login/consent. Approve YouTube upload access.
-   - `token.json` is saved in the account subfolder for future runs.
-
-### Output
-- Console: Progress (downloads, uploads, skips), account assignments.
-- Files:
-  - `upload_history.json`: Tracks status (`"success"`/`"failed"`), YouTube ID, and account.
-  - `error_log.txt`: Timestamped errors (e.g., "Download failed: HTTP 404").
-  - `tmp/*.mp4`: Downloaded videos (not deleted after upload—manual cleanup).
-
-## Batch Size and Distribution
-- `--batch-size N` limits **total attempts** (new videos processed) across all accounts.
-- Videos are assigned round-robin: Video 1 → account1, Video 2 → account2, etc.
-- Example with `--batch-size 5` and 2 accounts (all succeed):
-  - Total: 5 uploads.
-  - account1: 3 videos.
-  - account2: 2 videos.
-- Failures/skips don't count toward the limit—the script continues until N attempts or no more new videos.
-- For even per-account distribution, run separate commands per account.
-
-## File Structure After Run
-- `tmp/`: Downloaded MP4s (unique names like `reel_ABC123.mp4`).
-- `upload_history.json`: Example entry:
+### 5. Prepare Instagram Data
+- The script reads `instagram_data.json` (root folder).
+- **Format** (example for one video):
   ```json
   {
-    "https://www.instagram.com/reel/ABC123/": {
-      "status": "success",
-      "youtube_video_id": "abcDEF123",
-      "account": "account1"
+    "https://www.instagram.com/reel/DItyPnhzhJ4/": {
+      "media_details": [
+        {
+          "type": "video",
+          "url": "https://instagram.fdel11-1.fna.fbcdn.net/...mp4",
+          "dimensions": {
+            "width": 1080,
+            "height": 1920
+          }
+        }
+      ],
+      "post_info": {
+        "caption": "👀\n\n#sidhumoosewala #karanaujla #punjabisongs"
+      },
+      "url_list": ["https://instagram.fdel11-1.fna.fbcdn.net/...mp4"]
     }
   }
   ```
-- Videos on YouTube: Titles from captions (or fallback `#Shorts...`), descriptions with full caption, tags from hashtags.
+- **How to Generate** (Beginner Options):
+  - Use [Instaloader](https://instaloader.github.io/) (Python tool): `pip install instaloader` → `instaloader --login=your_username --no-videos --no-pictures --stories --highlights profile_name` (exports JSON).
+  - Browser Extension: "Instagram Downloader" or "Reels Downloader" (export JSON manually).
+  - Online Tools: Search "Instagram JSON exporter" (avoid sharing login).
+  - Place the JSON in the project root as `instagram_data.json`. Deduping is automatic.
+
+## Project Structure
+Create this folder setup (copy files from this repo):
+```
+Youtube-Automation/
+├── README.md                  # This file
+├── main.py                    # Run this
+├── instagram_data.json        # Your Instagram videos (generate as above)
+├── upload_history.json        # Auto-generated (tracks uploads)
+├── errors.log                 # Auto-generated (errors)
+├── tmp/                       # Auto-created/deleted (downloads)
+├── creds/                     # Credentials folder
+│   ├── ken/                   # Account 'ken'
+│   │   ├── client_secrets.json  # From Google Cloud (per account)
+│   │   └── token.json         # Auto-generated after auth
+│   ├── itzken/                # Other accounts (same structure)
+│   ├── kunikazu/
+│   └── naman/
+└── src/                       # Script modules (don't edit unless advanced)
+    ├── __init__.py            # Empty (package file)
+    ├── config.py
+    ├── processor.py
+    ├── upload.py
+    ├── download.py
+    ├── utils.py
+    └── history.py
+```
+
+- **Download the Code**: Copy all files from previous responses (or clone if repo exists). Ensure `src/__init__.py` is empty.
+
+## Usage
+
+### Basic Run (Single Account, One Upload)
+Open CMD in the project folder (`cd C:\Users\kunal\Desktop\Codes\python\test\Youtube-Automation`):
+```
+python main.py --creds-dir ./creds --accounts ken --privacy-status public --one-per-account --upscale
+```
+- **What Happens**:
+  1. Loads only 'ken' account (auth if first time).
+  2. Reads `instagram_data.json` (loads 14 videos, skips 1 from history → 13 new).
+  3. Downloads first new Reel to `tmp/` (e.g., 10.1s video).
+  4. Checks duration (≤60s for Shorts) and upscales if low-res (skips if 1080p).
+  5. Cleans title (e.g., "#Shorts 👀 #sidhumoosewala #karanaujla...").
+  6. Uploads as public Short to 'ken' channel.
+  7. Deletes temp file and cleans `tmp/` at end.
+  8. Updates `upload_history.json` (skips next run).
+- **Output Example**:
+  ```
+  Temporary directory: C:\...\tmp
+  Loading specified account(s): ken from './creds'...
+    - Loaded account 'ken'
+  Using accounts: ken (from ./creds)
+  Authenticated account 'ken' successfully.
+  One-per-account mode: Targeting 1 successful uploads (one per account).
+  Loaded 14 unique videos.
+  New videos available: 13
+  Attempt #1 for success #1/1 to account 'ken': https://www.instagram.com/reel/DItyPnhzhJ4/
+    - Parsed: Caption='👀\n\n#sidhumoosewala...', Video path=... (1080x1920)
+    - Downloading from https://... to tmp\reel_a5390289.mp4
+    - Downloaded successfully (281236 bytes)
+    - Valid Shorts video (10.1s)
+    - Skipping upscale (already high-res: 1080px width)
+    - Uploading to 'ken' as Short (title: '#Shorts 👀 #sidhumoosewala...')
+    - Uploading... (attempt 1/3)
+    - Upload completed! Video ID: [abc123]
+    - SUCCESS on 'ken'! ID: [abc123]
+    - Deleted temp file: tmp\reel_a5390289.mp4
+  Target of 1 successful uploads reached!
+
+  === SUMMARY ===
+  Uploaded: 1
+  Skipped/Failed: 0
+  Success! Check YouTube for new Shorts.
+  Cleaned up temporary directory: C:\...\tmp
+  ```
+- Check: Go to YouTube Studio → Content → New Short (title with #Shorts, vertical video).
+
+### Advanced Usage
+- **Multiple Specific Accounts (One Each)**:
+  ```
+  python main.py --creds-dir ./creds --accounts ken naman --privacy-status public --one-per-account --upscale
+  ```
+  - Uploads 1 to 'ken', 1 to 'naman' (round-robin if more videos).
+
+- **All Accounts (Round-Robin, Target 5 Total)**:
+  ```
+  python main.py --creds-dir ./creds --privacy-status public --target 5 --upscale
+  ```
+  - No `--accounts`: Loads all valid (e.g., 'ken', 'naman'). Distributes 5 uploads across them.
+
+- **Private/Unlisted Uploads**:
+  ```
+  python main.py --creds-dir ./creds --accounts ken --privacy-status unlisted --one-per-account
+  ```
+  - `--privacy-status`: 'public' (default: private), 'private', 'unlisted'.
+
+- **No Upscaling (Faster)**:
+  ```
+  python main.py --creds-dir ./creds --accounts ken --one-per-account  # Omit --upscale
+  ```
+  - Skips FFmpeg; uses original video.
+
+- **Custom Target**:
+  ```
+  python main.py --creds-dir ./creds --accounts ken --target 3 --upscale
+  ```
+  - 3 uploads to 'ken' (ignores --one-per-account).
+
+### Arguments Reference
+Run `python main.py --help` for details:
+- `--creds-dir ./creds`: Path to credentials (default: current dir).
+- `--accounts ken`: Specific accounts (space-separated; default: all).
+- `--privacy-status public`: Video visibility (public/private/unlisted; default: private).
+- `--one-per-account`: 1 upload per account (default: false).
+- `--target 5`: Total successful uploads (default: 5; ignored with --one-per-account).
+- `--upscale`: Enable 2x upscaling (default: off).
+
+## Authentication (First-Time Setup)
+1. Run the script (it detects missing token).
+2. **Local Server Mode** (Preferred on Windows with GUI):
+   - Prints: "Starting local OAuth server...".
+   - Browser auto-opens (or copy URL).
+   - Sign in → Authorize → Redirects automatically.
+3. **Manual Mode** (If hangs/headless/Termux):
+   - Prints manual URL: Copy → Open in browser → Sign in → Authorize.
+   - Copy FULL redirect URL (e.g., `urn:ietf:wg:oauth:2.0:oob?code=4/0AX4...` or `http://localhost...?code=ABC123`).
+   - Paste in terminal: "Paste the full redirect URL: ".
+4. Token saves to `./creds/ken/token.json` (future runs auto-refresh).
+- **Tips**: Use the exact Google account for the YouTube channel. If error "access denied", recreate `client_secrets.json`. Delete `token.json` to re-auth.
+
+## Generating Instagram JSON (Beginner Guide)
+1. **Option 1: Instaloader (Recommended, Free)**:
+   - `pip install instaloader`.
+   - Run: `instaloader --login=your_instagram_username your_profile --no-videos --no-pictures --json-only`.
+   - Outputs JSON files; merge into `instagram_data.json` (use online JSON merger or Python script).
+2. **Option 2: Browser Tools**:
+   - Install "Instagram Reels Downloader" Chrome extension.
+   - Download Reels → Export metadata as JSON (or manual copy-paste).
+3. **Option 3: Manual** (For Testing):
+   - Create `instagram_data.json` with 1-2 videos (use example above).
+   - Get video URL: Right-click Reel → "Copy video URL" (direct MP4 link).
+- **Script Handles**: Deduping, relative/absolute paths, caption extraction.
 
 ## Troubleshooting
-- **OAuth Browser Not Opening**: Ensure `port=0` in code; check firewall. Delete `token.json` to re-authenticate.
-- **Quota Exceeded**: YouTube API has daily limits (10,000 units/project). Script retries 3x with 60s delay. Distribute across accounts/projects.
-- **Download Fails**: Check Instagram URL validity (direct MP4 links). Network issues? Increase timeout in `download.py`.
-- **ffprobe Not Found**: Install FFmpeg. Duration check skips otherwise (no impact on upload).
-- **JSON Errors**: Ensure `media_details[0].url` and `post_info.caption` exist. Script skips invalid entries.
-- **No New Videos**: All processed? Check `upload_history.json`. Empty JSON? Regenerate.
-- **Multi-Account Issues**: Verify subfolders have `client_secrets.json`. Invalid accounts are skipped.
-- **Permissions**: YouTube channel must allow uploads (verify in YouTube Studio).
-- **Logs**: Always check `error_log.txt` for details.
+- **"No accounts found matching: ken"**: Ensure `./creds/ken/client_secrets.json` exists. Check spelling (case-sensitive).
+- **"Missing ./creds\client_secrets.json"**: Fixed by config (direct subdirs). If fallback, place single JSON in `./creds/`.
+- **Auth Hangs/Errors**: Firewall blocks local server? Use manual mode. "Invalid client": Recreate `client_secrets.json` (Desktop app type).
+- **"FileNotFoundError: instagram_data.json"**: Create/place JSON in root.
+- **"Download FAILED"**: Instagram URL expired? Regenerate JSON. Install `requests` if missing.
+- **"Duration unavailable" / FFmpeg Error**: Install FFmpeg (see Prerequisites). Script skips upscaling but uploads.
+- **"HTTP 400 invalidTitle"**: Fixed (cleans newlines). If persists, check caption in JSON.
+- **"Quota exceeded"**: YouTube limit hit. Wait 24h or request quota increase in Google Cloud.
+- **Windows Paths**: Uses `\` automatically. If issues, run as admin.
+- **No Uploads**: Check `errors.log` (e.g., "Too long for Shorts"). Ensure videos ≤60s.
+- **Token Invalid**: Delete `./creds/ken/token.json` → Re-run for re-auth.
 
-## Contributing
-Fork the repo, make changes, and submit a PR. Issues welcome!
+**Debug Mode**: Add `print` statements in `src/processor.py` (advanced). Run with `--target 1` for testing.
 
-## License
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details. (Add your own if needed.)
+## Customization (Advanced)
+- **Upscale Settings** (`src/utils.py`): Edit CRF (23=good quality; lower=better but larger), preset ('ultrafast'=fast; 'slow'=better compression).
+- **Title Length**: Change `[:100]` in `processor.py` (YouTube max 100 chars).
+- **Category**: Edit `categoryId="22"` in `upload.py` (22=People & Blogs; see YouTube docs).
+- **JSON Structure**: Adapt parsing in `processor.py` if your JSON differs.
+- **No FFmpeg**: Set `upscale=False` in `main.py` call.
 
-## Disclaimer
-- Respect Instagram/YouTube terms: Don't violate copyrights or spam.
-- API usage: Follow Google's quotas and policies.
-- Not affiliated with Instagram or YouTube.
+## Contributing & License
+- **Issues**: Open GitHub issue (or comment here).
+- **License**: MIT (free to use/modify). Credit if forked.
+- **Author**: Based on your setup; extend as needed.
 
-For support, open an issue on GitHub!
+**First Run Tips**: Start with `--one-per-account --target 1` (safe). Verify upload in YouTube app/Studio. Happy automating! 🚀
+
+If stuck, share error logs/output for help.
