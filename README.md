@@ -11,6 +11,8 @@ git checkout -b server origin/server
 git pull
 ```
 
+checkout automation: https://github.com/kanekikun07/automation/blob/main/.github/workflows/blank.yml
+
 # YouTube Shorts Automation from Instagram Reels
 
 [![Python](https://img.shields.io/badge/Python-3.8%2B-blue)](https://www.python.org/) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
